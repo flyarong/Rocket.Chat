@@ -202,10 +202,10 @@ API.v1.addRoute('users.info', { authRequired: true }, {
 			user.rooms = Subscriptions.findByUserId(user._id, {
 				fields: {
 					rid: 1,
-					bio: 1,
 					name: 1,
 					t: 1,
 					roles: 1,
+					unread: 1,
 				},
 				sort: {
 					t: 1,
@@ -507,7 +507,15 @@ API.v1.addRoute('users.updateOwnBasicInfo', { authRequired: true }, {
 			typedPassword: this.bodyParams.data.currentPassword,
 		};
 
-		Meteor.runAsUser(this.userId, () => Meteor.call('saveUserProfile', userData, this.bodyParams.customFields));
+		// saveUserProfile now uses the default two factor authentication procedures, so we need to provide that
+		const twoFactorOptions = !userData.typedPassword
+			? null
+			: {
+				twoFactorCode: userData.typedPassword,
+				twoFactorMethod: 'password',
+			};
+
+		Meteor.runAsUser(this.userId, () => Meteor.call('saveUserProfile', userData, this.bodyParams.customFields, twoFactorOptions));
 
 		return API.v1.success({ user: Users.findOneById(this.userId, { fields: API.v1.defaultFieldsToExclude }) });
 	},
@@ -614,11 +622,8 @@ API.v1.addRoute('users.forgotPassword', { authRequired: false }, {
 			return API.v1.failure('The \'email\' param is required');
 		}
 
-		const emailSent = Meteor.call('sendForgotPasswordEmail', email);
-		if (emailSent) {
-			return API.v1.success();
-		}
-		return API.v1.failure('User not found');
+		Meteor.call('sendForgotPasswordEmail', email);
+		return API.v1.success();
 	},
 });
 
