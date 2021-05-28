@@ -4,9 +4,11 @@ import Busboy from 'busboy';
 import { FileUpload } from '../../../file-upload';
 import { Rooms, Messages } from '../../../models';
 import { API } from '../api';
-import { findAdminRooms, findChannelAndPrivateAutocomplete, findAdminRoom } from '../lib/rooms';
+import { findAdminRooms, findChannelAndPrivateAutocomplete, findAdminRoom, findRoomsAvailableForTeams } from '../lib/rooms';
 import { sendFile, sendViaEmail } from '../../../../server/lib/channelExport';
 import { canAccessRoom, hasPermission } from '../../../authorization/server';
+import { Media } from '../../../../server/sdk';
+import { settings } from '../../../settings/server/index';
 
 function findRoomByIdOrName({ params, checkedArchived = true }) {
 	if ((!params.roomId || !params.roomId.trim()) && (!params.roomName || !params.roomName.trim())) {
@@ -120,7 +122,12 @@ API.v1.addRoute('rooms.upload/:rid', { authRequired: true }, {
 		};
 
 		const fileData = Meteor.runAsUser(this.userId, () => {
+			const stripExif = settings.get('Message_Attachments_Strip_Exif');
 			const fileStore = FileUpload.getStore('Uploads');
+			if (stripExif) {
+				// No need to check mime. Library will ignore any files without exif/xmp tags (like BMP, ico, PDF, etc)
+				file.fileBuffer = Promise.await(Media.stripExifFromBuffer(file.fileBuffer));
+			}
 			const uploadedFile = fileStore.insertSync(details, file.fileBuffer);
 
 			uploadedFile.description = fields.description;
@@ -194,7 +201,7 @@ API.v1.addRoute('rooms.cleanHistory', { authRequired: true }, {
 
 		const inclusive = this.bodyParams.inclusive || false;
 
-		Meteor.runAsUser(this.userId, () => Meteor.call('cleanRoomHistory', {
+		const count = Meteor.runAsUser(this.userId, () => Meteor.call('cleanRoomHistory', {
 			roomId: findResult._id,
 			latest,
 			oldest,
@@ -203,10 +210,11 @@ API.v1.addRoute('rooms.cleanHistory', { authRequired: true }, {
 			excludePinned: [true, 'true', 1, '1'].includes(this.bodyParams.excludePinned),
 			filesOnly: [true, 'true', 1, '1'].includes(this.bodyParams.filesOnly),
 			ignoreThreads: [true, 'true', 1, '1'].includes(this.bodyParams.ignoreThreads),
+			ignoreDiscussion: [true, 'true', 1, '1'].includes(this.bodyParams.ignoreDiscussion),
 			fromUsers: this.bodyParams.users,
 		}));
 
-		return API.v1.success();
+		return API.v1.success({ count });
 	},
 });
 
@@ -333,6 +341,21 @@ API.v1.addRoute('rooms.autocomplete.channelAndPrivate', { authRequired: true }, 
 		return API.v1.success(Promise.await(findChannelAndPrivateAutocomplete({
 			uid: this.userId,
 			selector: JSON.parse(selector),
+		})));
+	},
+});
+
+API.v1.addRoute('rooms.autocomplete.availableForTeams', { authRequired: true }, {
+	get() {
+		const { name } = this.queryParams;
+
+		if (name && typeof name !== 'string') {
+			return API.v1.failure('The \'name\' param is invalid');
+		}
+
+		return API.v1.success(Promise.await(findRoomsAvailableForTeams({
+			uid: this.userId,
+			name,
 		})));
 	},
 });
